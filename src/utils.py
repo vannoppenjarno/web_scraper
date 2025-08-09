@@ -148,28 +148,33 @@ def extract_location(parsed_request, selector):
     country = parsed_request.select_one(selector)
     return country.get_text(strip=True) if country else None
 
-def extract_emails(soup):
+def extract_emails(soup, url):
     """Extracts unique emails from visible text and mailto links in parsed HTML."""
     if not soup:
         return []
     
     # Visible text from all elements
     text = soup.get_text(separator=' ')
-
-    # Fallback: scan individual divs/spans too
-    # for tag in soup.find_all(['div', 'span', 'p']):
-    #     text += ' ' + tag.get_text(separator=' ')
-
-    emails_from_text = [clean_email(e) for e in re.findall(EMAIL_REGEX, text)]
-    # mailto_links = [clean_email(a['href'][7:]) for a in soup.find_all('a', href=True) if a['href'].startswith('mailto:')]
-    mailto_links = []
-    for a in soup.find_all('a'):
-        href = a.get('href', '')
-        if isinstance(href, str) and href.lower().startswith('mailto:'):
-            mailto_links.append(clean_email(href[7:]))  # Remove 'mailto:' prefix
+    emails = set(clean_email(e) for e in re.findall(EMAIL_REGEX, text))
     
-    all_emails = set(emails_from_text + mailto_links)
-    return list(filter(is_valid_email, all_emails))
+    if not emails:
+        for iframe in soup.find_all("iframe"):
+            src = iframe.get("src")
+            if src:
+                iframe_url = urljoin(url, src)
+                iframe_soup, _ = fetch_html(iframe_url)
+                emails.update(extract_emails(iframe_soup, iframe_url))
+    # for a in soup.find_all('a'):
+    #     href = a.get('href', '')
+    #     if isinstance(href, str) and href.lower().startswith('mailto:'):
+    #         emails.add(clean_email(href[7:]))  # Remove 'mailto:' prefix
+
+    #     # anchor visible text can contain emails too
+    #     link_text = a.get_text(strip=True)
+    #     if re.search(EMAIL_REGEX, link_text):
+    #         emails.add(clean_email(link_text))
+
+    return list(filter(is_valid_email, emails))
 
 def clean_email(email):
     """Cleans up the email by removing any query parameters or fragments."""
@@ -237,7 +242,7 @@ def follow_contact_page(soup, base_url):
             if contact_url:
                 contact_html, _ = fetch_html(contact_url)
                 if contact_html:
-                    return extract_emails(contact_html)
+                    return extract_emails(contact_html, contact_url)
     return []
 
 # def check_for_validation_page(soup):

@@ -14,22 +14,24 @@ def collect_company_info(url, config, company_info={}):
     
     for href in hrefs:
         try:
-            href_html, _ = fetch_html(config["start_url"] + href) # if config["company_tile_class"] else html
+            href_url = config["start_url"] + href
+            href_html, _ = fetch_html(href_url) # if config["company_tile_class"] else html
             company_link = extract_href(href_html, config["company_link_class"]) # if config["company_tile_class"] else href
             company_link = company_link[0] if company_link and isinstance(company_link, list) else company_link  # Ensure it's a string
             if not company_link or company_link in company_info["links"]:  # Avoid duplicates
                 continue
 
-            emails = extract_emails(href_html)
+            emails = extract_emails(href_html, href_url)
             if not emails:  # External link logic – if no email on Europages, go to the company’s actual website.
                 company_html, error = fetch_html(company_link)
 
                 if not company_html:
-                    if not error == "DNS" or error == 503: 
+                    if not error == "DNS" and error != 503: 
                         add_company_to_csv(company_link, error)  # Troubleshooting: log the error
                     continue
 
-                emails = extract_emails(company_html)
+                emails = extract_emails(company_html, company_link)
+                # maybe first check if first visit page, cuz then don't try the contacts!!
                 emails = emails if emails else follow_contact_page(company_html, company_link)  # Try to follow the contact page if no emails found
 
                 # If no email found, check if the company page is a first visit page (e.g., age verification) 
