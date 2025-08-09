@@ -4,12 +4,11 @@ import requests
 import pandas as pd
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, urljoin
-# from selenium import webdriver
-# from selenium.webdriver.common.by import By
-# from selenium.webdriver.common.keys import Keys
-# from selenium.webdriver.support.ui import WebDriverWait
-# from selenium.webdriver.support import expected_conditions as EC
-# import time
+import time
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
 
 TIMEOUT = 10
 EMAIL_REGEX = r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+'
@@ -25,29 +24,6 @@ HEADERS = {
         "Chrome/137.0.0.0 Safari/537.36"
     )
 }
-
-# def initialize_driver():
-#     """Function to initialize a headless Chrome WebDriver using Selenium."""
-#     options = webdriver.ChromeOptions()
-#     options.add_argument('--headless')
-#     options.add_argument('--no-sandbox') # Bypass OS security model
-#     options.add_argument('--disable-gpu') # Applicable to Windows OS only
-#     options.add_argument('--disable-dev-shm-usage') # Overcome limited resource problems
-#     options.add_argument(f"user-agent={HEADERS['User-Agent']}")
-#     driver = webdriver.Chrome(options=options)
-#     return driver
-
-# Manually extracting the search_selector from the DOM of a website to use selenium is much less efficient than
-# finding the search url AND using it with requests!
-# def search_sector(driver, sector, search_selector):
-#     """Function to search for a sector on the given URL."""
-#     search_input = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, search_selector)))
-#     search_input.send_keys(Keys.CONTROL + "a")
-#     search_input.send_keys(Keys.DELETE)
-#     time.sleep(0.2)
-#     search_input.send_keys(sector)
-#     search_input.send_keys(Keys.RETURN)
-#     time.sleep(2)  # Wait for search results to load
 
 def fetch_html(url):
     """Fetches HTML content from a given URL and parses it."""
@@ -66,7 +42,8 @@ def fetch_html(url):
                     redirect_url = urljoin(url, redirect_url)
             # if redirect_url != url:  # Avoid infinite loop on same URL
                 return fetch_html(redirect_url)
-            
+        
+        # elif status_code != 503:
         # elif status_code == 403 or status_code == 404: --> TRY selenium!!!
         # 404 moet eig anders behandled worden, want moet back to homepage of contact button zoeken
         # gebruik hiervoor een algemene contact button zoeker
@@ -90,47 +67,24 @@ def fetch_html(url):
 
     return "", error
 
-# def fetch_html_selenium(url):
-#     driver = initialize_driver()
-#     driver.implicitly_wait(10)  # Wait for elements to load
-#     try:
-#         driver.get(url)
-#         # WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.XPATH, "//a[starts-with(@href, 'mailto:')]")))
-#         WebDriverWait(driver, 5).until(lambda d: d.execute_script("return document.readyState") == "complete")
-#         time.sleep(2)
-#         # Try to click cookie consent or age confirmation buttons
-#         buttons = driver.find_elements(By.TAG_NAME, "a") + driver.find_elements(By.TAG_NAME, "button")
-#         # for btn in buttons:
-#         #     try:
-#         #         text = btn.text.strip().lower()
-#         #         if any(k in text for k in CONFIRMATION_KEYWORDS):
-#         #             href = btn.get_attribute('href')
-#         #             if href and href.startswith("http"):  # Follow redirect if needed
-#         #                 driver.get(href)
-#         #                 time.sleep(1)
-#         #                 return
-#         #             else:
-#         #                 btn.click()
-#         #                 time.sleep(1)
-#         #                 return
-#         #     except:
-#         #         continue
-#         for btn in buttons:
-#             try:
-#                 text = btn.text.strip().lower()
-#                 if any(k in text for k in CONFIRMATION_KEYWORDS):
-#                     btn.click()
-#                     time.sleep(1)
-#                     break
-#             except:
-#                 continue
-#         html = driver.page_source
-#         driver.quit()
-#         return BeautifulSoup(html, 'html.parser')
-#     except Exception as e:
-#         print(f"[Selenium Error] {url}: {e}")
-#         driver.quit()
-#         return ""
+def fetch_html_selenium(url, wait_seconds=2):
+    options = Options()
+    options.add_argument("--headless=new")   
+    options.add_argument("--no-sandbox")  # Bypass OS security model
+    options.add_argument("--disable-dev-shm-usage")  # Overcome limited resource problems
+    # options.add_argument('--disable-gpu') # Applicable to Windows OS only
+    # options.add_argument(f"user-agent={HEADERS['User-Agent']}")
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+
+    try:
+        driver.get(url)
+        time.sleep(wait_seconds)                    # simple wait; use WebDriverWait for precision
+        html = driver.page_source
+        return BeautifulSoup(html, "html.parser"), None
+    except Exception as e:
+        return "", f"Selenium error: {e}"
+    finally:
+        driver.quit()
 
 def extract_href(parsed_request, class_name):
     """Extracts hrefs from parsed HTML based on the provided class name."""
@@ -212,38 +166,6 @@ def extract_domain(url):
     from urllib.parse import urlparse
     netloc = urlparse(url).netloc
     return netloc.replace("www.", "") if netloc else ""
-    
-def save_to_csv(data, filename, headers=None):
-    """Saves data to a CSV."""
-    if headers is not None:
-        df = pd.DataFrame(data, columns=headers)
-    else:
-        df = pd.DataFrame(data)
-    df.drop_duplicates(inplace=True)
-    df.to_csv(filename, index=False)
-
-def follow_contact_page(soup, base_url):
-    """Follows the contact page link and extracts emails."""
-    links = soup.find_all("a", href=True)
-    contact_url = None
-    for a in links:
-        href = a['href'].lower()
-
-        for keyword in CONTACT:
-            if keyword in href:  # Check if the link contains 'contact' or similar
-                contact_url = href
-
-                if contact_url.startswith("/"):
-                    contact_url = base_url.rstrip("/") + contact_url
-
-                elif not contact_url.startswith("http"):
-                    contact_url = base_url.rstrip("/") + "/" + contact_url
-
-            if contact_url:
-                contact_html, _ = fetch_html(contact_url)
-                if contact_html:
-                    return extract_emails(contact_html, contact_url)
-    return []
 
 # def check_for_validation_page(soup):
     # Check the length of the soup, if it is small, it is a validation page and should be handled accordingly
@@ -252,6 +174,31 @@ def follow_contact_page(soup, base_url):
     # text = soup.get_text(separator=' ').lower()
     # return any(keyword in text for keyword in CONFIRMATION_KEYWORDS)
     # # print(len(response.text))
+
+def extract_contact_page(soup, base_url):
+    """Extracts the contact page URL from the company page."""
+    links = soup.find_all("a", href=True)
+    contact_url = None
+    for a in links:
+        href = a['href'].lower()
+        for keyword in CONTACT:
+            if keyword in href:  # Check if the link contains 'contact' or similar
+                contact_url = href
+                if contact_url.startswith("/"):
+                    contact_url = base_url.rstrip("/") + contact_url
+                elif not contact_url.startswith("http"):
+                    contact_url = base_url.rstrip("/") + "/" + contact_url
+                break
+    return contact_url              
+
+def save_to_csv(data, filename, headers=None):
+    """Saves data to a CSV."""
+    if headers is not None:
+        df = pd.DataFrame(data, columns=headers)
+    else:
+        df = pd.DataFrame(data)
+    df.drop_duplicates(inplace=True)
+    df.to_csv(filename, index=False)
 
 def add_company_to_csv(url, error, csv_filename="output/errors.csv", headers=None):
     """Adds a company's information to an existing CSV file.
