@@ -132,14 +132,6 @@ def fetch_html(url):
 #         driver.quit()
 #         return ""
 
-def is_valid_url(url):
-    """Checks if a URL is reachable."""
-    try:
-        response = SESSION.head(url, timeout=TIMEOUT, headers=HEADERS)
-        return response.status_code == 200
-    except requests.RequestException:
-        return False
-
 def extract_href(parsed_request, class_name):
     """Extracts hrefs from parsed HTML based on the provided class name."""
     link_tags = parsed_request.find_all("a", class_=class_name)

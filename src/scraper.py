@@ -1,4 +1,4 @@
-from .utils import fetch_html, extract_href, extract_company_name, extract_location, extract_emails, is_valid_url, select_primary_email, add_company_to_csv, follow_contact_page#, fetch_html_selenium
+from .utils import fetch_html, extract_href, extract_company_name, extract_location, extract_emails, select_primary_email, add_company_to_csv, follow_contact_page#, fetch_html_selenium
 
 def collect_company_info(url, config, company_info={}):
     """Recursively collects company info from the current page."""
@@ -38,11 +38,6 @@ def collect_company_info(url, config, company_info={}):
                 # company_html = fetch_html_selenium(company_link)
                 # email = extract_emails(company_html)
 
-            elif not is_valid_url(company_link):  
-                # FYI: Check if the extracted company link is valid when the company link isn't requested
-                # (i.e., the email is found on Europages, which never seems to be the case on Europages)
-                # Assumes that a non-valid company link (with status code != 200) has to be excluded from the output
-                continue
             if emails:
                 email = emails[0] if len(emails) == 1 else select_primary_email(emails, company_link)
             else:
