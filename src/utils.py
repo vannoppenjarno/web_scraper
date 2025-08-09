@@ -67,12 +67,14 @@ def fetch_html(url):
             # if redirect_url != url:  # Avoid infinite loop on same URL
                 return fetch_html(redirect_url)
             
-        # elif status_code == 403:
-            # print(f"403 encountered, retrying with Selenium for {url}")
+        # elif status_code == 403 or status_code == 404: --> TRY selenium!!!
+        # 404 moet eig anders behandled worden, want moet back to homepage of contact button zoeken
+        # gebruik hiervoor een algemene contact button zoeker
+        # test deze op een aantal verschillende urls met contact buttons
             # return fetch_html_selenium(url)
             # return 403  # Return 403 status code to handle it later
 
-        error = f"HTTP Error {status_code}"
+        error = status_code
 
     except requests.exceptions.ConnectionError as e:
         if "NameResolutionError" in str(e) or "getaddrinfo failed" in str(e):
@@ -226,20 +228,24 @@ def save_to_csv(data, filename, headers=None):
 def follow_contact_page(soup, base_url):
     """Follows the contact page link and extracts emails."""
     links = soup.find_all("a", href=True)
+    contact_url = None
     for a in links:
         href = a['href'].lower()
+
         for keyword in CONTACT:
             if keyword in href:  # Check if the link contains 'contact' or similar
                 contact_url = href
+
                 if contact_url.startswith("/"):
                     contact_url = base_url.rstrip("/") + contact_url
-                elif contact_url.startswith("http"):
-                    pass
-                else:
+
+                elif not contact_url.startswith("http"):
                     contact_url = base_url.rstrip("/") + "/" + contact_url
-            contact_html = fetch_html(contact_url)
-            if contact_html:
-                return extract_emails(contact_html)
+
+            if contact_url:
+                contact_html, _ = fetch_html(contact_url)
+                if contact_html:
+                    return extract_emails(contact_html)
     return []
 
 # def check_for_validation_page(soup):

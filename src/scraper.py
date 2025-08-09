@@ -1,4 +1,4 @@
-from .utils import fetch_html, extract_href, extract_company_name, extract_location, extract_emails, is_valid_url, select_primary_email, add_company_to_csv#, follow_contact_page, fetch_html_selenium
+from .utils import fetch_html, extract_href, extract_company_name, extract_location, extract_emails, is_valid_url, select_primary_email, add_company_to_csv, follow_contact_page#, fetch_html_selenium
 
 def collect_company_info(url, config, company_info={}):
     """Recursively collects company info from the current page."""
@@ -23,24 +23,24 @@ def collect_company_info(url, config, company_info={}):
             emails = extract_emails(href_html)
             if not emails:  # External link logic – if no email on Europages, go to the company’s actual website.
                 company_html, error = fetch_html(company_link)
-                if not company_html:
-                    if not error == "DNS": # DNS error --> site is effectively offline ==> skip this error
-                        add_company_to_csv(company_link, error)
-                    continue
-                # if company_html: #and company_html != 403:
-                # First, try to extract emails from the company page
-                emails = extract_emails(company_html)
-                # If no email found, check if the company page is a validation page (e.g., age verification)
-                # Second, try contacts page if email is not found
-                # Third, if email is still not found or 403 error, try to extract it with selenium and again check for validation page and contacts
 
-                    # email = email if email else follow_contact_page(company_html, company_link)
-                # if company_html == 403 or not email:  # If the request fails (403) or not able to extract emails, try Selenium
-                    # company_html = fetch_html_selenium(company_link)
-                    # email = extract_emails(company_html)
+                if not company_html:
+                    if not error == "DNS" or error == 503: 
+                        add_company_to_csv(company_link, error)  # Troubleshooting: log the error
+                    continue
+
+                emails = extract_emails(company_html)
+                emails = emails if emails else follow_contact_page(company_html, company_link)  # Try to follow the contact page if no emails found
+
+                # If no email found, check if the company page is a first visit page (e.g., age verification) 
+                # YES? --> use selenium? to pass first visit page and again check for contacts if no email found
+                # NO? --> website probably contains no email ==> continue
+                # company_html = fetch_html_selenium(company_link)
+                # email = extract_emails(company_html)
+
             elif not is_valid_url(company_link):  
-                # Check if the extracted company link is valid when the email is found on Europages (which never seems to be the case on Europages)
-                # (i.e., when the company link isn't requested)
+                # FYI: Check if the extracted company link is valid when the company link isn't requested
+                # (i.e., the email is found on Europages, which never seems to be the case on Europages)
                 # Assumes that a non-valid company link (with status code != 200) has to be excluded from the output
                 continue
             if emails:
