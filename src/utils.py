@@ -11,12 +11,8 @@ from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 
 TIMEOUT = 10
-EMAIL_REGEX = r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+'
+RETRIES = 3
 SESSION = requests.Session()  # Improve performance by reusing the session
-BLOCKED_EMAIL_KEYWORDS = ['example', 'noreply']
-CONTACT = ['contact', 'kontakt', 'contat']
-GENERIC_EMAIL_KEYWORDS = ['info', 'contact', 'office', 'hello', 'admin', 'mail']
-CONFIRMATION_KEYWORDS = ["yes", "18", "accept", "agree", "continue", "i am", "ok", "si", "ja", "oui", "sì", "sì,", "welcome"]  # Add more if needed
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -25,32 +21,45 @@ HEADERS = {
     )
 }
 
-def fetch_html(url):
-    """Fetches HTML content from a given URL and parses it."""
-    try:
-        response = SESSION.get(url, timeout=TIMEOUT, stream=True, headers=HEADERS, allow_redirects=False)
-        status_code = response.status_code
+EMAIL_REGEX = r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+'
+BLOCKED_EMAIL_KEYWORDS = ['example', 'noreply']
+CONTACT = ['contact', 'kontakt', 'contat']  # 'kapcsolat', 'Επικοινωνια', 'ΕΠΙΚΟΙΝΩΝΙΑ'
+GENERIC_EMAIL_KEYWORDS = ['info', 'contact', 'office', 'hello', 'admin', 'mail']
 
-        if status_code == 200:
-            response.encoding = response.apparent_encoding
-            return BeautifulSoup(response.text, 'html.parser'), None
+# Age verification keywords (in multiple languages)
+AGE_KEYWORDS = ["eres mayor de edad", "are you of legal", "legal drinking age", "вам исполнилось 18", 
+                "vous avez plus de 18", "over 18"]
+
+# Cookie wall keywords
+COOKIE_KEYWORDS = ["usamos cookies", "acepto", "manage consent", "guardar y aceptar", "cookie policy"]
+
+# Yes/No response indicators
+YN_KEYWORDS = ["sí", "si", "yes", "no", "да", "нет"]
+
+# Login wall indicators
+# LOGIN_KEYWORDS = ["inicia sesión", "login", "sign in"]
+
+
+
+def fetch_html(url, timeout=TIMEOUT,retries=0):
+    """Fetches HTML content from a given URL and parses it."""
+    soup = ""
+    if not is_valid_url(url):
+        return soup, "Invalid URL"
+    try:
+        response = SESSION.get(url, timeout=timeout, stream=True, headers=HEADERS, allow_redirects=False)
+        response.encoding = response.apparent_encoding  # Analyzes the actual byte content and guesses the most likely encoding
+        status_code = response.status_code
         
-        elif 300 <= status_code < 400:
+        if 300 <= status_code < 400:
             redirect_url = response.headers.get("Location").replace("www.www.", "www.")
             if redirect_url:
                 if not urlparse(redirect_url).scheme:  # If missing scheme, add from current URL
                     redirect_url = urljoin(url, redirect_url)
             # if redirect_url != url:  # Avoid infinite loop on same URL
                 return fetch_html(redirect_url)
-        
-        # elif status_code != 503:
-        # elif status_code == 403 or status_code == 404: --> TRY selenium!!!
-        # 404 moet eig anders behandled worden, want moet back to homepage of contact button zoeken
-        # gebruik hiervoor een algemene contact button zoeker
-        # test deze op een aantal verschillende urls met contact buttons
-            # return fetch_html_selenium(url)
-            # return 403  # Return 403 status code to handle it later
 
+        soup = BeautifulSoup(response.text, 'html.parser')
         error = status_code
 
     except requests.exceptions.ConnectionError as e:
@@ -61,30 +70,57 @@ def fetch_html(url):
 
     except requests.exceptions.Timeout:
         error = "Timeout"
+        if retries < RETRIES:
+            return fetch_html(url, 2*timeout, retries + 1)  # Retry fetching HTML
 
     except requests.exceptions.RequestException as e:
         error = f"Request Exception: {e}"
 
-    return "", error
+    return soup, error
 
 def fetch_html_selenium(url, wait_seconds=2):
     options = Options()
-    options.add_argument("--headless=new")   
+    options.add_argument("--headless")   
     options.add_argument("--no-sandbox")  # Bypass OS security model
     options.add_argument("--disable-dev-shm-usage")  # Overcome limited resource problems
     # options.add_argument('--disable-gpu') # Applicable to Windows OS only
-    # options.add_argument(f"user-agent={HEADERS['User-Agent']}")
+    options.add_argument(f"user-agent={HEADERS['User-Agent']}")
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
     try:
         driver.get(url)
         time.sleep(wait_seconds)                    # simple wait; use WebDriverWait for precision
         html = driver.page_source
-        return BeautifulSoup(html, "html.parser"), None
+        return BeautifulSoup(html, "html.parser"), 200
     except Exception as e:
         return "", f"Selenium error: {e}"
     finally:
         driver.quit()
+
+def is_valid_url(url: str) -> bool:
+    # Basic conditions
+    if "http" not in url.lower():
+        return False
+    if "@gmail.com" in url.lower():
+        return False
+    if "@" in url:  # No @ symbol allowed at all
+        return False
+    
+    # Extract domain part (between // and first / after that)
+    try:
+        domain = re.search(r"https?://([^/]+)", url).group(1)
+    except AttributeError:
+        return False  # couldn't parse domain
+    
+    # Valid domain characters: letters, numbers, hyphens, dots
+    if not re.match(r"^[a-zA-Z0-9.-]+$", domain):
+        return False
+    
+    # Domain shouldn't start or end with a hyphen or dot
+    if domain.startswith(("-", ".")) or domain.endswith(("-", ".")):
+        return False
+    
+    return True
 
 def extract_href(parsed_request, class_name):
     """Extracts hrefs from parsed HTML based on the provided class name."""
@@ -118,15 +154,16 @@ def extract_emails(soup, url):
                 iframe_url = urljoin(url, src)
                 iframe_soup, _ = fetch_html(iframe_url)
                 emails.update(extract_emails(iframe_soup, iframe_url))
-    # for a in soup.find_all('a'):
-    #     href = a.get('href', '')
-    #     if isinstance(href, str) and href.lower().startswith('mailto:'):
-    #         emails.add(clean_email(href[7:]))  # Remove 'mailto:' prefix
 
-    #     # anchor visible text can contain emails too
-    #     link_text = a.get_text(strip=True)
-    #     if re.search(EMAIL_REGEX, link_text):
-    #         emails.add(clean_email(link_text))
+    for a in soup.find_all('a'):
+        href = a.get('href', '')
+        if isinstance(href, str) and href.lower().startswith('mailto:'):
+            emails.add(clean_email(href[7:]))  # Remove 'mailto:' prefix
+
+        # anchor visible text can contain emails too
+        link_text = a.get_text(strip=True)
+        if re.search(EMAIL_REGEX, link_text):
+            emails.add(clean_email(link_text))
 
     return list(filter(is_valid_email, emails))
 
@@ -167,13 +204,41 @@ def extract_domain(url):
     netloc = urlparse(url).netloc
     return netloc.replace("www.", "") if netloc else ""
 
-# def check_for_validation_page(soup):
-    # Check the length of the soup, if it is small, it is a validation page and should be handled accordingly
-    # if not soup or len(soup.get_text()) < 100:  # Arbitrary length threshold
-    #     return True
-    # text = soup.get_text(separator=' ').lower()
-    # return any(keyword in text for keyword in CONFIRMATION_KEYWORDS)
-    # # print(len(response.text))
+def homepage_fallback(url):
+    """Fallback function to get the homepage URL (assuming its the base URL)."""
+    parsed = urlparse(url)
+    return f"{parsed.scheme}://{parsed.netloc}/"
+
+def is_first_visit_page(parsed_text: str) -> bool:
+    """
+    Check whether the parsed text likely represents a 'first visit' verification page.
+    parsed_text: text extracted from HTML (soup.get_text()).
+    """
+    text = parsed_text.lower()
+
+    # Length check: If the page is extremely short, it’s suspicious
+    if len(text) < 50:
+        return True
+
+    # Vocabulary size check: If it contains very few distinct words, also suspicious
+    words = set(text.split())
+    if len(words) < 5:
+        return True
+    
+    # Alternatively, integrate DOM element counting (e.g., if <script> and <iframe> tags dominate, mark as suspicious) = more robust
+
+    # Check for any match
+    if any(k in text for k in AGE_KEYWORDS):
+        return True
+    if any(k in text for k in COOKIE_KEYWORDS):
+        return True
+    # if any(k in text for k in LOGIN_KEYWORDS):
+        # return True
+    # Optional: detect high density of yes/no buttons in small page
+    if sum(text.count(k) for k in YN_KEYWORDS) >= 2 and len(text) < 3000:
+        return True
+
+    return False
 
 def extract_contact_page(soup, base_url):
     """Extracts the contact page URL from the company page."""
@@ -181,8 +246,13 @@ def extract_contact_page(soup, base_url):
     contact_url = None
     for a in links:
         href = a['href'].lower()
-        for keyword in CONTACT:
-            if keyword in href:  # Check if the link contains 'contact' or similar
+        for keyword1 in CONTACT:
+            if keyword1 not in href:
+                continue
+            text = a.get_text(strip=True).lower()  # visible button text
+            for keyword2 in CONTACT:
+                if keyword2 not in text:  # Also check text 
+                    continue
                 contact_url = href
                 if contact_url.startswith("/"):
                     contact_url = base_url.rstrip("/") + contact_url

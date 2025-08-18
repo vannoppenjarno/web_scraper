@@ -1,4 +1,4 @@
-from .utils import fetch_html, extract_href, extract_company_name, extract_location, extract_emails, select_primary_email, add_company_to_csv, extract_contact_page, fetch_html_selenium
+from .utils import fetch_html, extract_href, extract_company_name, extract_location, extract_emails, select_primary_email, add_company_to_csv, extract_contact_page, fetch_html_selenium, homepage_fallback, is_first_visit_page
 
 def collect_company_info(url, config, company_info={}):
     """Recursively collects company info from the current page."""
@@ -26,17 +26,32 @@ def collect_company_info(url, config, company_info={}):
                 company_html, error = fetch_html(company_link)
 
                 if not company_html:
-                    if not error == "DNS" and error != 503: 
+                    if not error == "DNS":  
                         add_company_to_csv(company_link, error)  # Troubleshooting: log the error
                     continue
+                
+                if error == 403:
+                    if "Forbidden" in company_html.text:
+                        continue  # Skip if the page is forbidden
+                    company_html, error = fetch_html_selenium(company_link)  # Try selenium for refused requests
 
+                elif error == 404:
+                    new_url = homepage_fallback(url)
+                    if new_url == company_link or not new_url:
+                        # You could also try to add an extra check to exclude unsolvable 404 errors
+                        # (e.g., check for homepage button or "error" in the text...)
+                        continue
+                    company_link = new_url
+                    company_html, error = fetch_html(new_url)
+                
                 emails = extract_emails(company_html, company_link)
                 new_url = company_link  # Default to the original company link
 
-                # if not emails:  
-                    # If no email found, check if the company page is a first visit page (e.g., age verification) 
+                # if not emails and is_first_visit_page(company_html):  
                     # YES? --> use selenium? to pass first visit page and again check for contacts if no email found
-                    # NO? --> website probably contains no email ==> continue
+                    # hard to make this modular...
+                    # Still no email found? --> try contacts --> 
+                    # Still no email --> website probably contains no email ==> continue
 
                     # new_url = ...  # get url past first visit page
                     # new_html, _ = fetch_html(new_url)
@@ -55,7 +70,8 @@ def collect_company_info(url, config, company_info={}):
                     emails = extract_emails(final_html, new_url)
 
                 if not emails:
-                    add_company_to_csv(company_link, "No email found")
+                    if error != 503:  # No need to log 503 errors as they need no troubleshooting
+                        add_company_to_csv(company_link, error)  # error == 200 ==> No email found
                     continue
             
             email = emails[0] if len(emails) == 1 else select_primary_email(emails, company_link)
