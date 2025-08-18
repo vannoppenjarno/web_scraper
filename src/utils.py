@@ -245,20 +245,19 @@ def extract_contact_page(soup, base_url):
     links = soup.find_all("a", href=True)
     contact_url = None
     for a in links:
+        text = a.get_text(strip=True).lower()  # visible button text
+        if "cookie" in text:
+            continue
         href = a['href'].lower()
-        for keyword1 in CONTACT:
-            if keyword1 not in href:
+        for keyword in CONTACT:
+            if keyword not in href:
                 continue
-            text = a.get_text(strip=True).lower()  # visible button text
-            for keyword2 in CONTACT:
-                if keyword2 not in text:  # Also check text 
-                    continue
-                contact_url = href
-                if contact_url.startswith("/"):
-                    contact_url = base_url.rstrip("/") + contact_url
-                elif not contact_url.startswith("http"):
-                    contact_url = base_url.rstrip("/") + "/" + contact_url
-                break
+            contact_url = href
+            if contact_url.startswith("/"):
+                contact_url = base_url.rstrip("/") + contact_url
+            elif not contact_url.startswith("http"):
+                contact_url = base_url.rstrip("/") + "/" + contact_url
+            break
     return contact_url              
 
 def save_to_csv(data, filename, headers=None):
