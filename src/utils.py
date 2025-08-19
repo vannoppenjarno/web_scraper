@@ -1,9 +1,10 @@
 import os
 import re
-import time
+import base64
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
+from bs4 import NavigableString
 from urllib.parse import urlparse, urljoin
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -24,15 +25,15 @@ HEADERS = {
     )
 }
 
+COOKIE = "cookie"
 EMAIL_REGEX = r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+'
 BLOCKED_EMAIL_KEYWORDS = ['example', 'noreply']
 CONTACT = ['contact', 'kontakt', 'contat', 'kapcsolat', 'quem-somos', 'impressum']  # 'eπικοινωνια' 
 GENERIC_EMAIL_KEYWORDS = ['info', 'contact', 'office', 'hello', 'admin', 'mail']
 GATE_KEYWORDS = ["yes", "si", "ja", "oui", "sim", "accept", "agree", "continue", "older", "i am", "enter",
                  "english", "ok", "got it"]
-COOKIE = "cookie"
 
-def fetch_html(url, timeout=TIMEOUT,retries=0):
+def fetch_html(url, timeout=TIMEOUT, retries=0):
     """Fetches HTML content from a given URL and parses it."""
     soup = ""
     if not is_valid_url(url):
@@ -72,24 +73,19 @@ def fetch_html(url, timeout=TIMEOUT,retries=0):
 def initialize_selenium_driver():
     """Initializes a Selenium WebDriver with Chrome options."""
     options = Options()
-    options.add_argument("--headless")  # Run in headless mode
+    # options.add_argument("--headless")  # Run in headless mode
     options.add_argument("--no-sandbox")  # Bypass OS security model
     options.add_argument("--disable-dev-shm-usage")  # Overcome limited resource problems
     options.add_argument('--disable-gpu') # Applicable to Windows OS only
-    # options.add_argument("--ignore-certificate-errors")
-    # options.add_argument("--ignore-ssl-errors")
-    # options.add_argument("--allow-insecure-localhost")
-    # options.add_experimental_option("excludeSwitches", ["enable-logging"])  # removes DevTools + USB logs
-    # options.add_argument("--log-level=3")  # suppresses INFO and WARNING from Chrome
     options.add_argument(f"user-agent={HEADERS['User-Agent']}")
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
     return driver
 
-def fetch_html_selenium(driver, url, bypass_gate=False, timeout=TIMEOUT):
+def fetch_html_selenium(driver, url=None, bypass_gate=False, timeout=TIMEOUT):
     try:
         if url:
             driver.get(url)
-        if bypass_gate:
+        if bypass_gate and driver:
             try_click_gate_buttons(driver)
 
         # Wait for some visible content 
@@ -163,8 +159,10 @@ def is_valid_url(url: str) -> bool:
 
 def extract_href(parsed_request, class_name):
     """Extracts hrefs from parsed HTML based on the provided class name."""
+    if not parsed_request:
+        return ""
     link_tags = parsed_request.find_all("a", class_=class_name)
-    return [tag["href"] for tag in link_tags] if link_tags else []
+    return [tag["href"] for tag in link_tags] if link_tags else ""
 
 def extract_company_name(parsed_request, class_name):
     """Extracts company names from parsed HTML based on the provided class name."""
@@ -177,34 +175,72 @@ def extract_location(parsed_request, selector):
     country = parsed_request.select_one(selector)
     return country.get_text(strip=True) if country else None
 
-def extract_emails(soup, url):
+def flatten_text(element):
+    """Recursively join all text in nested tags without adding extra spaces."""
+    texts = []
+    for node in element.descendants:
+        if isinstance(node, NavigableString):
+            texts.append(str(node))
+    return ''.join(texts)
+
+def extract_email(soup, url):
     """Extracts unique emails from visible text and mailto links in parsed HTML."""
     if not soup:
-        return []
+        return None
     
-    # Visible text from all elements
-    text = soup.get_text(separator=' ')
-    emails = set(clean_email(e) for e in re.findall(EMAIL_REGEX, text))
+    emails = set()
+    # --- 1. Visible text from all elements ---
+    text = normalize_text(soup.get_text(separator=' '))
+    if text:
+        emails = set(clean_email(e) for e in re.findall(EMAIL_REGEX, text))
     
+    # --- 2. Handle iframes recursively ---
     if not emails:
         for iframe in soup.find_all("iframe"):
             src = iframe.get("src")
             if src:
                 iframe_url = urljoin(url, src)
                 iframe_soup, _ = fetch_html(iframe_url)
-                emails.update(extract_emails(iframe_soup, iframe_url))
+                email = extract_email(iframe_soup, iframe_url)
+                if email:
+                    emails.update(email)
 
+    # --- 3. Scan anchor tags ---
     for a in soup.find_all('a'):
         href = a.get('href', '')
         if isinstance(href, str) and href.lower().startswith('mailto:'):
             emails.add(clean_email(href[7:]))  # Remove 'mailto:' prefix
 
-        # anchor visible text can contain emails too
+        # anchor visible text can contain (obfuscated) emails too
         link_text = a.get_text(strip=True)
         if re.search(EMAIL_REGEX, link_text):
-            emails.add(clean_email(link_text))
+            emails.add(clean_email(normalize_text(link_text)))
 
-    return list(filter(is_valid_email, emails))
+    # --- 4. Scan all attributes for base64 encoded or hidden emails ---
+    for tag in soup.find_all(True):
+        for attr_val in tag.attrs.values():
+            if isinstance(attr_val, str):
+                attr_val = attr_val.strip()
+                decoded = try_base64_decode(attr_val)
+                if decoded:
+                    emails.add(decoded)
+
+    emails = list(filter(is_valid_email, emails))
+    if not emails:
+        return None
+    email = emails[0] if len(emails) == 1 else select_primary_email(emails, url)
+    return email
+
+def normalize_text(text: str) -> str:
+    """Clean common email obfuscations in text."""
+    if not text:
+        return ""
+    text = text.replace("(at)", "@").replace("[at]", "@").replace("{at}", "@")
+    text = re.sub(r'\s+@\s+', '@', text)        # remove spaces around @
+    text = re.sub(r'\s+', ' ', text)            # normalize whitespace
+    text = text.replace("\u200b", "")           # zero width space
+    text = text.replace("\xa0", " ")            # non-breaking space
+    return text
 
 def clean_email(email):
     """Cleans up the email by removing any query parameters or fragments."""
@@ -213,6 +249,18 @@ def clean_email(email):
 def is_valid_email(email):
     """Checks if an email is a valid business email based on common fake/broken email formats."""
     return all(x not in email.lower() for x in BLOCKED_EMAIL_KEYWORDS)
+
+def try_base64_decode(value: str):
+    """Try to decode a base64 string and return email if found."""
+    try:
+        decoded = base64.b64decode(value).decode(errors="ignore")
+        if decoded.startswith("mailto:"):
+            return decoded[7:]
+        elif re.fullmatch(EMAIL_REGEX, decoded):
+            return decoded
+    except Exception:
+        pass
+    return None
 
 def select_primary_email(email_list, company_url):
     """Heuristically selects the most relevant email."""
@@ -248,8 +296,14 @@ def homepage_fallback(url):
     parsed = urlparse(url)
     return f"{parsed.scheme}://{parsed.netloc}/"
 
-def extract_emails_from_contact_page(soup, base_url, driver=None):
+def extract_email_from_contact_page(soup, base_url, driver=None):
     """Extracts emails from the contact page."""
+    if not soup:
+        return None, "No contact page found"
+    
+    if driver:
+        WebDriverWait(driver, TIMEOUT).until(EC.presence_of_all_elements_located((By.TAG_NAME, "a")))
+
     links = soup.find_all("a", href=True)
     strong_candidates = []
     weak_candidates = []
@@ -274,7 +328,7 @@ def extract_emails_from_contact_page(soup, base_url, driver=None):
     candidates = strong_candidates if strong_candidates else weak_candidates
 
     if not candidates:
-        return [], "No contact page found"
+        return None, "No contact page found"
 
     contact_url = candidates[0]['href']
     if contact_url.startswith("/"):
@@ -287,7 +341,7 @@ def extract_emails_from_contact_page(soup, base_url, driver=None):
         
     else: 
         contact_html, error, _ = fetch_html_selenium(driver, contact_url, bypass_gate=False) 
-    return extract_emails(contact_html, contact_url), error
+    return extract_email(contact_html, contact_url), error
 
 def save_to_csv(data, filename, headers=None):
     """Saves data to a CSV."""

@@ -1,4 +1,4 @@
-from src.utils import save_to_csv
+from src.utils import initialize_selenium_driver, save_to_csv
 from src.scraper import collect_company_info
 
 # Manually extracting the search_selector from the DOM of a website to use selenium is much less efficient than
@@ -21,11 +21,13 @@ WEBSITES = {
 config = WEBSITES["europages"]
 
 for sector in config["sectors"]:
-    info = collect_company_info(config["search_url"] + sector, config)
+    driver = initialize_selenium_driver()
+    info = collect_company_info(config["search_url"] + sector, driver, config)
     
     # Save links to CSV
     save_to_csv(info["links"], f"output/links_{sector}.csv", headers=["url"])
 
     # Save names, countries, and emails to CSV
-    data = {"name": info["names"], "country": info["countries"], "email": info["emails"]}
+    data = {"name": info["names"], "country": info["countries"], "email": info["email"]}
     save_to_csv(data, f"output/emails_{sector}.csv", headers=["name", "country", "email"])
+    driver.quit()
