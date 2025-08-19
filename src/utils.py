@@ -1,14 +1,17 @@
 import os
 import re
+import time
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, urljoin
-import time
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 TIMEOUT = 10
 RETRIES = 3
@@ -23,23 +26,11 @@ HEADERS = {
 
 EMAIL_REGEX = r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+'
 BLOCKED_EMAIL_KEYWORDS = ['example', 'noreply']
-CONTACT = ['contact', 'kontakt', 'contat']  # 'kapcsolat', 'Επικοινωνια', 'ΕΠΙΚΟΙΝΩΝΙΑ'
+CONTACT = ['contact', 'kontakt', 'contat', 'kapcsolat', 'quem-somos', 'impressum']  # 'eπικοινωνια' 
 GENERIC_EMAIL_KEYWORDS = ['info', 'contact', 'office', 'hello', 'admin', 'mail']
-
-# Age verification keywords (in multiple languages)
-AGE_KEYWORDS = ["eres mayor de edad", "are you of legal", "legal drinking age", "вам исполнилось 18", 
-                "vous avez plus de 18", "over 18"]
-
-# Cookie wall keywords
-COOKIE_KEYWORDS = ["usamos cookies", "acepto", "manage consent", "guardar y aceptar", "cookie policy"]
-
-# Yes/No response indicators
-YN_KEYWORDS = ["sí", "si", "yes", "no", "да", "нет"]
-
-# Login wall indicators
-# LOGIN_KEYWORDS = ["inicia sesión", "login", "sign in"]
-
-
+GATE_KEYWORDS = ["yes", "si", "ja", "oui", "sim", "accept", "agree", "continue", "older", "i am", "enter",
+                 "english", "ok", "got it"]
+COOKIE = "cookie"
 
 def fetch_html(url, timeout=TIMEOUT,retries=0):
     """Fetches HTML content from a given URL and parses it."""
@@ -78,24 +69,72 @@ def fetch_html(url, timeout=TIMEOUT,retries=0):
 
     return soup, error
 
-def fetch_html_selenium(url, wait_seconds=2):
+def initialize_selenium_driver():
+    """Initializes a Selenium WebDriver with Chrome options."""
     options = Options()
-    options.add_argument("--headless")   
+    options.add_argument("--headless")  # Run in headless mode
     options.add_argument("--no-sandbox")  # Bypass OS security model
     options.add_argument("--disable-dev-shm-usage")  # Overcome limited resource problems
-    # options.add_argument('--disable-gpu') # Applicable to Windows OS only
+    options.add_argument('--disable-gpu') # Applicable to Windows OS only
+    # options.add_argument("--ignore-certificate-errors")
+    # options.add_argument("--ignore-ssl-errors")
+    # options.add_argument("--allow-insecure-localhost")
+    # options.add_experimental_option("excludeSwitches", ["enable-logging"])  # removes DevTools + USB logs
+    # options.add_argument("--log-level=3")  # suppresses INFO and WARNING from Chrome
     options.add_argument(f"user-agent={HEADERS['User-Agent']}")
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    return driver
 
+def fetch_html_selenium(driver, url, bypass_gate=False, timeout=TIMEOUT):
     try:
-        driver.get(url)
-        time.sleep(wait_seconds)                    # simple wait; use WebDriverWait for precision
+        if url:
+            driver.get(url)
+        if bypass_gate:
+            try_click_gate_buttons(driver)
+
+        # Wait for some visible content 
+        try:
+            WebDriverWait(driver, timeout).until(
+                EC.presence_of_element_located((By.TAG_NAME, "body"))
+            )
+        except:
+            pass
+
         html = driver.page_source
-        return BeautifulSoup(html, "html.parser"), 200
+        return BeautifulSoup(html, "html.parser"), 200, driver
     except Exception as e:
-        return "", f"Selenium error: {e}"
-    finally:
-        driver.quit()
+        return "", f"Selenium error: {e}", driver
+
+def try_click_gate_buttons(driver):
+    """
+    Try to bypass first-visit gates (age, language, cookies) by clicking
+    links or buttons containing relevant keywords.
+    """
+    # Collect candidate elements
+    candidates = driver.find_elements(By.TAG_NAME, "a") + driver.find_elements(By.TAG_NAME, "button")
+    for el in candidates:
+        try:
+            text = el.get_attribute("textContent").strip().lower()
+
+            if COOKIE in text:
+                el.click()  # Click cookie consent buttons directly
+                continue
+                
+            if any(keyword in text for keyword in GATE_KEYWORDS):
+                href = el.get_attribute("href")
+
+                if href:  # If it's a link
+                    absolute_href = urljoin(driver.current_url, href)
+                    driver.get(absolute_href)
+
+                else:  # Otherwise click button
+                    driver.execute_script("arguments[0].click();", el)
+
+                return True
+        except Exception:
+            continue
+
+    return False
 
 def is_valid_url(url: str) -> bool:
     # Basic conditions
@@ -209,56 +248,46 @@ def homepage_fallback(url):
     parsed = urlparse(url)
     return f"{parsed.scheme}://{parsed.netloc}/"
 
-def is_first_visit_page(parsed_text: str) -> bool:
-    """
-    Check whether the parsed text likely represents a 'first visit' verification page.
-    parsed_text: text extracted from HTML (soup.get_text()).
-    """
-    text = parsed_text.lower()
-
-    # Length check: If the page is extremely short, it’s suspicious
-    if len(text) < 50:
-        return True
-
-    # Vocabulary size check: If it contains very few distinct words, also suspicious
-    words = set(text.split())
-    if len(words) < 5:
-        return True
-    
-    # Alternatively, integrate DOM element counting (e.g., if <script> and <iframe> tags dominate, mark as suspicious) = more robust
-
-    # Check for any match
-    if any(k in text for k in AGE_KEYWORDS):
-        return True
-    if any(k in text for k in COOKIE_KEYWORDS):
-        return True
-    # if any(k in text for k in LOGIN_KEYWORDS):
-        # return True
-    # Optional: detect high density of yes/no buttons in small page
-    if sum(text.count(k) for k in YN_KEYWORDS) >= 2 and len(text) < 3000:
-        return True
-
-    return False
-
-def extract_contact_page(soup, base_url):
-    """Extracts the contact page URL from the company page."""
+def extract_emails_from_contact_page(soup, base_url, driver=None):
+    """Extracts emails from the contact page."""
     links = soup.find_all("a", href=True)
-    contact_url = None
+    strong_candidates = []
+    weak_candidates = []
+
     for a in links:
         text = a.get_text(strip=True).lower()  # visible button text
-        if "cookie" in text:
-            continue
         href = a['href'].lower()
-        for keyword in CONTACT:
-            if keyword not in href:
-                continue
-            contact_url = href
-            if contact_url.startswith("/"):
-                contact_url = base_url.rstrip("/") + contact_url
-            elif not contact_url.startswith("http"):
-                contact_url = base_url.rstrip("/") + "/" + contact_url
-            break
-    return contact_url              
+
+        if COOKIE in text:
+            continue
+
+        # Check contact keywords
+        href_match = any(keyword in href for keyword in CONTACT)
+        text_match = any(keyword in text for keyword in CONTACT)
+
+        if href_match and text_match:
+            strong_candidates.append(a)
+        elif href_match or text_match:
+            weak_candidates.append(a)
+
+    # Prefer strong match
+    candidates = strong_candidates if strong_candidates else weak_candidates
+
+    if not candidates:
+        return [], "No contact page found"
+
+    contact_url = candidates[0]['href']
+    if contact_url.startswith("/"):
+        contact_url = base_url.rstrip("/") + contact_url
+    elif not contact_url.startswith("http"):
+        contact_url = base_url.rstrip("/") + "/" + contact_url
+    
+    if not driver:
+        contact_html, error = fetch_html(contact_url) 
+        
+    else: 
+        contact_html, error, _ = fetch_html_selenium(driver, contact_url, bypass_gate=False) 
+    return extract_emails(contact_html, contact_url), error
 
 def save_to_csv(data, filename, headers=None):
     """Saves data to a CSV."""
