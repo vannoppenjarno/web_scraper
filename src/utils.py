@@ -175,14 +175,6 @@ def extract_location(parsed_request, selector):
     country = parsed_request.select_one(selector)
     return country.get_text(strip=True) if country else None
 
-def flatten_text(element):
-    """Recursively join all text in nested tags without adding extra spaces."""
-    texts = []
-    for node in element.descendants:
-        if isinstance(node, NavigableString):
-            texts.append(str(node))
-    return ''.join(texts)
-
 def extract_email(soup, url):
     """Extracts unique emails from visible text and mailto links in parsed HTML."""
     if not soup:
