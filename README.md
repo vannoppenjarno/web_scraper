@@ -5,8 +5,6 @@ This pipeline scrapes company profile URLs and corresponding email addresses fro
 
 To scrape other websites, some minimal information (urls, classes and a selector) must be manually gathered from the website's DOM.
 
----
-
 ## Features
 - Extracts company profile links by sector.
 - Visits company pages and parses emails.
@@ -17,25 +15,17 @@ To scrape other websites, some minimal information (urls, classes and a selector
   - `links_<sector>.csv`: all company profile URLs
   - `emails_<sector>.csv`: company name, country, and extracted emails
 
----
-
 ## Scripts
 - `main`: Master script to run pipeline
 - `src/scraper.py`: Core scraping logic 
 - `src/utils.py`: Helper functions (e.g., fetch html, extract hrefs and emails, contact page detection, etc.)
 
----
-
 ## Output
 - `output/links_<sector>.csv` — List of company profile URLs.
 - `output/emails_<sector>.csv` — List of company names, countries, and email addresses.
 
----
-
 ## Limitations
 - Not all companies expose an email address.
-
----
 
 ## Run
 ```bash
