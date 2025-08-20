@@ -287,7 +287,6 @@ def select_primary_email(email_list, company_url):
 
 def extract_domain(url):
     """Extracts domain name from a URL like https://www.company.com -> company.com"""
-    from urllib.parse import urlparse
     netloc = urlparse(url).netloc
     return netloc.replace("www.", "") if netloc else ""
 

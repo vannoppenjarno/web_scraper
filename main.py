@@ -19,15 +19,16 @@ WEBSITES = {
 }
 
 config = WEBSITES["europages"]
+driver = initialize_selenium_driver()
 
 for sector in config["sectors"]:
-    driver = initialize_selenium_driver()
     info = collect_company_info(config["search_url"] + sector, driver, config)
     
     # Save links to CSV
     save_to_csv(info["links"], f"output/links_{sector}.csv", headers=["url"])
 
     # Save names, countries, and emails to CSV
-    data = {"name": info["names"], "country": info["countries"], "email": info["email"]}
+    data = {"name": info["names"], "country": info["countries"], "email": info["emails"]}
     save_to_csv(data, f"output/emails_{sector}.csv", headers=["name", "country", "email"])
-    driver.quit()
+    
+driver.quit()
