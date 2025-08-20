@@ -58,7 +58,7 @@ def fetch_html(url, timeout=TIMEOUT, retries=0):
         if "NameResolutionError" in str(e) or "getaddrinfo failed" in str(e):
             error = "DNS" # DNS Failure (Domain cannot be resolved) 
         else:
-            error = f"Connection Error: {e}"
+            error = f"Connection Error" #: {e}"
 
     except requests.exceptions.Timeout:
         error = "Timeout"
@@ -73,7 +73,7 @@ def fetch_html(url, timeout=TIMEOUT, retries=0):
 def initialize_selenium_driver():
     """Initializes a Selenium WebDriver with Chrome options."""
     options = Options()
-    # options.add_argument("--headless")  # Run in headless mode
+    options.add_argument("--headless")  # Run in headless mode
     options.add_argument("--no-sandbox")  # Bypass OS security model
     options.add_argument("--disable-dev-shm-usage")  # Overcome limited resource problems
     options.add_argument('--disable-gpu') # Applicable to Windows OS only

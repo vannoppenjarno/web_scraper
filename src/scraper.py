@@ -17,9 +17,6 @@ def collect_company_info(url, driver, config, company_info={}):
     # driver = None
     for href in hrefs:
         try:
-            # if driver:
-            #     driver.quit()  # Close the driver if it was used
-
             href_url = config["start_url"] + href
             href_html, _ = fetch_html(href_url) # if config["company_tile_class"] else html
             company_link = extract_href(href_html, config["company_link_class"]) # if config["company_tile_class"] else href
@@ -31,7 +28,7 @@ def collect_company_info(url, driver, config, company_info={}):
             if not email:  # External link logic – if no email on Europages, go to the company’s actual website.
                 company_html, error = fetch_html(company_link)
 
-                if not company_html:
+                if not company_html and "Connection Error" not in error:
                     if not error == "DNS":  
                         add_company_to_csv(company_link, error)  # Troubleshooting: log the error
                     continue
